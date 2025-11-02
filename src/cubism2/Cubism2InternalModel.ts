@@ -120,6 +120,8 @@ export class Cubism2InternalModel extends InternalModel {
 
             drawParam.gl.viewport(...this.viewport);
         };
+
+        this.setBlinkParam(baseBlinkParam)
     }
 
     protected getSize(): [number, number] {
@@ -289,12 +291,14 @@ export class Cubism2InternalModel extends InternalModel {
 
     updateNaturalMovements(dt: DOMHighResTimeStamp, now: DOMHighResTimeStamp) {
         const t = (now / 1000) * 2 * Math.PI;
+        
+        // 暂时不需要控制这些参数, 否则模型会摇头晃脑
+        // this.coreModel.addToParamFloat(this.angleXParamIndex, 15 * Math.sin(t / 6.5345) * 0.5);
+        // this.coreModel.addToParamFloat(this.angleYParamIndex, 8 * Math.sin(t / 3.5345) * 0.5);
+        // this.coreModel.addToParamFloat(this.angleZParamIndex, 10 * Math.sin(t / 5.5345) * 0.5);
+        // this.coreModel.addToParamFloat(this.bodyAngleXParamIndex, 4 * Math.sin(t / 15.5345) * 0.5);
 
-        this.coreModel.addToParamFloat(this.angleXParamIndex, 15 * Math.sin(t / 6.5345) * 0.5);
-        this.coreModel.addToParamFloat(this.angleYParamIndex, 8 * Math.sin(t / 3.5345) * 0.5);
-        this.coreModel.addToParamFloat(this.angleZParamIndex, 10 * Math.sin(t / 5.5345) * 0.5);
-        this.coreModel.addToParamFloat(this.bodyAngleXParamIndex, 4 * Math.sin(t / 15.5345) * 0.5);
-
+        // 保留对 PARAM_BREATH 参数的控制
         this.coreModel.setParamFloat(this.breathParamIndex, 0.5 + 0.5 * Math.sin(t / 3.2345));
     }
 
@@ -328,5 +332,22 @@ export class Cubism2InternalModel extends InternalModel {
 
         // cubism2 core has a super dumb memory management so there's basically nothing much to do to release the model
         (this as Partial<this>).coreModel = undefined;
+    }
+
+    setBlinkParam(blinkParam: BlinkParam): void {
+        if (!this.eyeBlink) {
+            return;
+        }
+
+        try {
+            this.eyeBlink.blinkInterval = blinkParam.blinkInterval;
+            this.eyeBlink.blinkIntervalRandom = blinkParam.blinkIntervalRandom;
+            this.eyeBlink.closingDuration = blinkParam.closingDuration;
+            this.eyeBlink.closedDuration = blinkParam.closedDuration;
+            this.eyeBlink.openingDuration = blinkParam.openingDuration;
+            this.eyeBlink.recalculateBlinkInterval();
+        } catch (error) {
+            console.error('Failed to set blink parameters:', error);
+        }
     }
 }
