@@ -27,6 +27,7 @@ var __async = (__this, __arguments, generator) => {
 };
 import { utils, Matrix, Texture, Transform, Point, ObservablePoint } from "@pixi/core";
 import { Container } from "@pixi/display";
+import { AlphaFilter } from "@pixi/filter-alpha";
 const LOGICAL_WIDTH = 2;
 const LOGICAL_HEIGHT = 2;
 var CubismConfig;
@@ -71,9 +72,13 @@ const config = {
   /**
    * If false, expression will be reset to default when playing non-idle motions.
    */
-  preserveExpressionOnMotion: true,
-  cubism4: CubismConfig
+  preserveExpressionOnMotion: true
+  /**
+   * 旧版表情混合模式
+   */
 };
+const cubism4 = CubismConfig;
+const legacyExpressionBlendMode = false;
 const VERSION = "v0.5.0-ls-8";
 const logger = {
   log(tag, ...messages) {
@@ -1569,6 +1574,14 @@ class MotionManager extends utils.EventEmitter {
     self2.motionGroups = void 0;
   }
 }
+const baseBlinkParam = {
+  blinkInterval: 24 * 60 * 60 * 1e3,
+  // 24小时
+  blinkIntervalRandom: 1e3,
+  closingDuration: 100,
+  closedDuration: 50,
+  openingDuration: 150
+};
 const tempBounds = { x: 0, y: 0, width: 0, height: 0 };
 class InternalModel extends utils.EventEmitter {
   constructor() {
@@ -2614,195 +2627,70 @@ const tempMatrix$1 = new Matrix();
 class Live2DModel extends Container {
   constructor(options) {
     super();
-    /**
-     * Tag for logging.
-     */
     __publicField(this, "tag", "Live2DModel(uninitialized)");
-    /**
-     * The internal model. Though typed as non-nullable, it'll be undefined until the "ready" event is emitted.
-     */
     __publicField(this, "internalModel");
-    /**
-     * Pixi textures.
-     */
     __publicField(this, "textures", []);
-    /** @override */
     __publicField(this, "transform", new Live2DTransform());
-    /**
-     * The anchor behaves like the one in `PIXI.Sprite`, where `(0, 0)` means the top left
-     * and `(1, 1)` means the bottom right.
-     */
     __publicField(this, "anchor", new ObservablePoint(this.onAnchorChange, this, 0, 0));
-    // cast the type because it breaks the casting of Live2DModel
-    /**
-     * An ID of Gl context that syncs with `renderer.CONTEXT_UID`. Used to check if the GL context has changed.
-     */
     __publicField(this, "glContextID", -1);
-    /**
-     * Elapsed time in milliseconds since created.
-     */
     __publicField(this, "elapsedTime", 0);
-    /**
-     * Elapsed time in milliseconds from last frame to this frame.
-     */
     __publicField(this, "deltaTime", 0);
     __publicField(this, "automator");
+    __publicField(this, "overrideBounds", {
+      x0: 0,
+      y0: 0,
+      x1: 0,
+      y1: 0
+    });
+    __publicField(this, "_alphaFilter");
+    __publicField(this, "_lastWorldAlpha", 1);
     this.automator = new Automator(this, options);
+    this._alphaFilter = new AlphaFilter(1);
+    this.filters = [this._alphaFilter];
     this.once("modelLoaded", () => this.init(options));
   }
-  /**
-   * Creates a Live2DModel from given source.
-   * @param source - Can be one of: settings file URL, settings JSON object, ModelSettings instance.
-   * @param options - Options for the creation.
-   * @return Promise that resolves with the Live2DModel.
-   */
   static from(source, options) {
     const model = new this(options);
     return Live2DFactory.setupLive2DModel(model, source, options).then(() => model);
   }
-  /**
-   * Synchronous version of `Live2DModel.from()`. This method immediately returns a Live2DModel instance,
-   * whose resources have not been loaded. Therefore this model can't be manipulated or rendered
-   * until the "load" event has been emitted.
-   *
-   * ```js
-   * // no `await` here as it's not a Promise
-   * const model = Live2DModel.fromSync('shizuku.model.json');
-   *
-   * // these will cause errors!
-   * // app.stage.addChild(model);
-   * // model.motion('tap_body');
-   *
-   * model.once('load', () => {
-   *     // now it's safe
-   *     app.stage.addChild(model);
-   *     model.motion('tap_body');
-   * });
-   * ```
-   */
   static fromSync(source, options) {
     const model = new this(options);
     Live2DFactory.setupLive2DModel(model, source, options).then(options == null ? void 0 : options.onLoad).catch(options == null ? void 0 : options.onError);
     return model;
   }
-  /**
-   * Registers the class of `PIXI.Ticker` for auto updating.
-   * @deprecated Use {@link Live2DModelOptions.ticker} instead.
-   */
   static registerTicker(tickerClass) {
     Automator["defaultTicker"] = tickerClass.shared;
   }
-  // TODO: rename
-  /**
-   * A handler of the "modelLoaded" event, invoked when the internal model has been loaded.
-   */
   init(options) {
     this.tag = `Live2DModel(${this.internalModel.settings.name})`;
+    if (options == null ? void 0 : options.overWriteBounds) {
+      this.overrideBounds = options.overWriteBounds;
+    }
   }
-  /**
-   * A callback that observes {@link anchor}, invoked when the anchor's values have been changed.
-   */
   onAnchorChange() {
     this.pivot.set(
       this.anchor.x * this.internalModel.width,
       this.anchor.y * this.internalModel.height
     );
   }
-  /**
-   * Shorthand to start a motion.
-   * @param group - The motion group.
-   * @param index - Index in the motion group.
-   * @param priority - The priority to be applied. (0: No priority, 1: IDLE, 2:NORMAL, 3:FORCE) (default: 2)
-   * ### OPTIONAL: `{name: value, ...}`
-   * @param sound - The audio url to file or base64 content
-   * @param volume - Volume of the sound (0-1) (default: 0.5)
-   * @param expression - In case you want to mix up a expression while playing sound (bind with Model.expression())
-   * @param resetExpression - Reset the expression to default after the motion is finished (default: true)
-   * @return Promise that resolves with true if the motion is successfully started, with false otherwise.
-   */
-  motion(group, index, priority, {
-    sound = void 0,
-    volume = VOLUME,
-    expression = void 0,
-    resetExpression = true,
-    crossOrigin,
-    onFinish,
-    onError
-  } = {}) {
-    return index === void 0 ? this.internalModel.motionManager.startRandomMotion(group, priority, {
-      sound,
-      volume,
-      expression,
-      resetExpression,
-      crossOrigin,
-      onFinish,
-      onError
-    }) : this.internalModel.motionManager.startMotion(group, index, priority, {
-      sound,
-      volume,
-      expression,
-      resetExpression,
-      crossOrigin,
-      onFinish,
-      onError
-    });
+  motion(group, index, priority, options = {}) {
+    return index === void 0 ? this.internalModel.motionManager.startRandomMotion(group, priority, options) : this.internalModel.motionManager.startMotion(group, index, priority, options);
   }
-  /**
-   * Stops all playing motions as well as the sound.
-   */
   stopMotions() {
     return this.internalModel.motionManager.stopAllMotions();
   }
-  /**
-   * Shorthand to start speaking a sound with an expression.
-   * @param sound - The audio url to file or base64 content
-   * ### OPTIONAL: {name: value, ...}
-   * @param volume - Volume of the sound (0-1)
-   * @param expression - In case you want to mix up a expression while playing sound (bind with Model.expression())
-   * @param resetExpression - Reset the expression to default after the motion is finished (default: true)
-   * @returns Promise that resolves with true if the sound is playing, false if it's not
-   */
-  speak(sound, {
-    volume = VOLUME,
-    expression,
-    resetExpression = true,
-    crossOrigin,
-    onFinish,
-    onError
-  } = {}) {
-    return this.internalModel.motionManager.speak(sound, {
-      volume,
-      expression,
-      resetExpression,
-      crossOrigin,
-      onFinish,
-      onError
-    });
+  speak(sound, options = {}) {
+    return this.internalModel.motionManager.speak(sound, options);
   }
-  /**
-   * Stop current audio playback and lipsync
-   */
   stopSpeaking() {
     return this.internalModel.motionManager.stopSpeaking();
   }
-  /**
-   * Shorthand to set an expression.
-   * @param id - Either the index, or the name of the expression. If not presented, a random expression will be set.
-   * @return Promise that resolves with true if succeeded, with false otherwise.
-   */
   expression(id) {
     if (this.internalModel.motionManager.expressionManager) {
       return id === void 0 ? this.internalModel.motionManager.expressionManager.setRandomExpression() : this.internalModel.motionManager.expressionManager.setExpression(id);
     }
     return Promise.resolve(false);
   }
-  /**
-   * Updates the focus position. This will not cause the model to immediately look at the position,
-   * instead the movement will be interpolated.
-   * @param x - Position in world space.
-   * @param y - Position in world space.
-   * @param instant - Should the focus position be instantly applied.
-   */
   focus(x, y, instant = false) {
     tempPoint.x = x;
     tempPoint.y = y;
@@ -2812,13 +2700,6 @@ class Live2DModel extends Container {
     const radian = Math.atan2(ty, tx);
     this.internalModel.focusController.focus(Math.cos(radian), -Math.sin(radian), instant);
   }
-  /**
-   * Tap on the model. This will perform a hit-testing, and emit a "hit" event
-   * if at least one of the hit areas is hit.
-   * @param x - Position in world space.
-   * @param y - Position in world space.
-   * @emits {@link Live2DModelEvents.hit}
-   */
   tap(x, y) {
     const hitAreaNames = this.hitTest(x, y);
     if (hitAreaNames.length) {
@@ -2826,25 +2707,12 @@ class Live2DModel extends Container {
       this.emit("hit", hitAreaNames);
     }
   }
-  /**
-   * Hit-test on the model.
-   * @param x - Position in world space.
-   * @param y - Position in world space.
-   * @return The names of the *hit* hit areas. Can be empty if none is hit.
-   */
   hitTest(x, y) {
     tempPoint.x = x;
     tempPoint.y = y;
     this.toModelPosition(tempPoint, tempPoint);
     return this.internalModel.hitTest(tempPoint.x, tempPoint.y);
   }
-  /**
-   * Calculates the position in the canvas of original, unscaled Live2D model.
-   * @param position - A Point in world space.
-   * @param result - A Point to store the new value. Defaults to a new Point.
-   * @param skipUpdate - True to skip the update transform.
-   * @return The Point in model canvas space.
-   */
   toModelPosition(position, result = position.clone(), skipUpdate) {
     if (!skipUpdate) {
       this._recursivePostUpdateTransform();
@@ -2860,34 +2728,27 @@ class Live2DModel extends Container {
     this.internalModel.localTransform.applyInverse(result, result);
     return result;
   }
-  /**
-   * A method required by `PIXI.InteractionManager` to perform hit-testing.
-   * @param point - A Point in world space.
-   * @return True if the point is inside this model.
-   */
   containsPoint(point) {
     return this.getBounds(true).contains(point.x, point.y);
   }
-  /** @override */
   _calculateBounds() {
     this._bounds.addFrame(
       this.transform,
-      0,
-      0,
-      this.internalModel.width,
-      this.internalModel.height
+      this.overrideBounds.x0,
+      this.overrideBounds.y0,
+      this.internalModel.width + this.overrideBounds.x1,
+      this.internalModel.height + this.overrideBounds.y1
     );
   }
-  /**
-   * Updates the model. Note this method just updates the timer,
-   * and the actual update will be done right before rendering the model.
-   * @param dt - The elapsed time in milliseconds since last frame.
-   */
   update(dt) {
     this.deltaTime += dt;
     this.elapsedTime += dt;
   }
   _render(renderer) {
+    if (this.worldAlpha !== this._lastWorldAlpha) {
+      this._alphaFilter.alpha = this.worldAlpha;
+      this._lastWorldAlpha = this.worldAlpha;
+    }
     renderer.batch.reset();
     renderer.geometry.reset();
     renderer.shader.reset();
@@ -2900,9 +2761,8 @@ class Live2DModel extends Container {
     }
     for (let i = 0; i < this.textures.length; i++) {
       const texture = this.textures[i];
-      if (!texture.valid) {
+      if (!texture.valid)
         continue;
-      }
       if (shouldUpdateTexture || !texture.baseTexture._glTextures[this.glContextID]) {
         renderer.gl.pixelStorei(
           WebGLRenderingContext.UNPACK_FLIP_Y_WEBGL,
@@ -2928,18 +2788,6 @@ class Live2DModel extends Container {
     renderer.state.reset();
     renderer.texture.reset();
   }
-  /**
-   * Destroys the model and all related resources. This takes the same options and also
-   * behaves the same as `PIXI.Container#destroy`.
-   * @param options - Options parameter. A boolean will act as if all options
-   *  have been set to that value
-   * @param [options.children=false] - if set to true, all the children will have their destroy
-   *  method called as well. 'options' will be passed on to those calls.
-   * @param [options.texture=false] - Only used for child Sprites if options.children is set to true
-   *  Should it destroy the texture of the child sprite
-   * @param [options.baseTexture=false] - Only used for child Sprites if options.children is set to true
-   *  Should it destroy the base texture of the child sprite
-   */
   destroy(options) {
     this.emit("destroy");
     if (options == null ? void 0 : options.texture) {
@@ -3084,6 +2932,7 @@ class Live2DEyeBlink {
     __publicField(this, "leftParam");
     __publicField(this, "rightParam");
     __publicField(this, "blinkInterval", 4e3);
+    __publicField(this, "blinkIntervalRandom", 1e3);
     __publicField(this, "closingDuration", 100);
     __publicField(this, "closedDuration", 50);
     __publicField(this, "openingDuration", 150);
@@ -3094,11 +2943,21 @@ class Live2DEyeBlink {
     this.coreModel = coreModel;
     this.leftParam = coreModel.getParamIndex("PARAM_EYE_L_OPEN");
     this.rightParam = coreModel.getParamIndex("PARAM_EYE_R_OPEN");
+    this.recalculateBlinkInterval();
   }
   setEyeParams(value) {
     this.eyeParamValue = clamp(value, 0, 1);
-    this.coreModel.setParamFloat(this.leftParam, this.eyeParamValue);
-    this.coreModel.setParamFloat(this.rightParam, this.eyeParamValue);
+    this.coreModel.multParamFloat(this.leftParam, this.eyeParamValue);
+    this.coreModel.multParamFloat(this.rightParam, this.eyeParamValue);
+  }
+  /**
+   * 计算新的眨眼间隔，包括随机值
+   */
+  recalculateBlinkInterval() {
+    let newBlinkInterval = this.blinkInterval;
+    newBlinkInterval += rand(-1, 1) * this.blinkIntervalRandom;
+    newBlinkInterval = Math.max(newBlinkInterval, 0);
+    this.nextBlinkTimeLeft = newBlinkInterval;
   }
   update(dt) {
     switch (this.eyeState) {
@@ -3106,27 +2965,33 @@ class Live2DEyeBlink {
         this.nextBlinkTimeLeft -= dt;
         if (this.nextBlinkTimeLeft < 0) {
           this.eyeState = 1;
-          this.nextBlinkTimeLeft = this.blinkInterval + this.closingDuration + this.closedDuration + this.openingDuration + rand(0, 2e3);
+          this.recalculateBlinkInterval();
         }
         break;
       case 1:
-        this.setEyeParams(this.eyeParamValue + dt / this.closingDuration);
+        this.eyeParamValue = this.eyeParamValue - dt / this.closingDuration;
+        this.setEyeParams(Math.max(this.eyeParamValue, 0));
         if (this.eyeParamValue <= 0) {
           this.eyeState = 2;
           this.closedTimer = 0;
+          this.eyeParamValue = 0;
         }
         break;
       case 2:
         this.closedTimer += dt;
+        this.setEyeParams(this.eyeParamValue);
         if (this.closedTimer >= this.closedDuration) {
           this.eyeState = 3;
         }
         break;
       case 3:
-        this.setEyeParams(this.eyeParamValue + dt / this.openingDuration);
+        this.eyeParamValue = this.eyeParamValue + dt / this.openingDuration;
+        this.setEyeParams(Math.min(this.eyeParamValue, 1));
         if (this.eyeParamValue >= 1) {
           this.eyeState = 0;
+          this.eyeParamValue = 1;
         }
+        break;
     }
   }
 }
@@ -3218,6 +3083,7 @@ class Cubism2InternalModel extends InternalModel {
       originalSetupClip.call(clipManager, modelContext, drawParam);
       drawParam.gl.viewport(...this.viewport);
     };
+    this.setBlinkParam(baseBlinkParam);
   }
   getSize() {
     return [this.coreModel.getCanvasWidth(), this.coreModel.getCanvasHeight()];
@@ -3345,10 +3211,6 @@ class Cubism2InternalModel extends InternalModel {
   }
   updateNaturalMovements(dt, now) {
     const t = now / 1e3 * 2 * Math.PI;
-    this.coreModel.addToParamFloat(this.angleXParamIndex, 15 * Math.sin(t / 6.5345) * 0.5);
-    this.coreModel.addToParamFloat(this.angleYParamIndex, 8 * Math.sin(t / 3.5345) * 0.5);
-    this.coreModel.addToParamFloat(this.angleZParamIndex, 10 * Math.sin(t / 5.5345) * 0.5);
-    this.coreModel.addToParamFloat(this.bodyAngleXParamIndex, 4 * Math.sin(t / 15.5345) * 0.5);
     this.coreModel.setParamFloat(this.breathParamIndex, 0.5 + 0.5 * Math.sin(t / 3.2345));
   }
   draw(gl) {
@@ -3371,6 +3233,26 @@ class Cubism2InternalModel extends InternalModel {
   destroy() {
     super.destroy();
     this.coreModel = void 0;
+  }
+  setBlinkParam(blinkParam) {
+    if (!this.eyeBlink) {
+      return;
+    }
+    try {
+      if (blinkParam.blinkInterval !== void 0)
+        this.eyeBlink.blinkInterval = blinkParam.blinkInterval;
+      if (blinkParam.blinkIntervalRandom !== void 0)
+        this.eyeBlink.blinkIntervalRandom = blinkParam.blinkIntervalRandom;
+      if (blinkParam.closingDuration !== void 0)
+        this.eyeBlink.closingDuration = blinkParam.closingDuration;
+      if (blinkParam.closedDuration !== void 0)
+        this.eyeBlink.closedDuration = blinkParam.closedDuration;
+      if (blinkParam.openingDuration !== void 0)
+        this.eyeBlink.openingDuration = blinkParam.openingDuration;
+      this.eyeBlink.recalculateBlinkInterval();
+    } catch (error) {
+      console.error("Failed to set blink parameters:", error);
+    }
   }
 }
 class Cubism2ModelSettings extends ModelSettings {
@@ -6398,137 +6280,6 @@ class BreathParameterData {
   }
   // パラメータへの重み
 }
-const _CubismEyeBlink = class _CubismEyeBlink {
-  /**
-   * インスタンスを作成する
-   * @param modelSetting モデルの設定情報
-   * @return 作成されたインスタンス
-   * @note 引数がNULLの場合、パラメータIDが設定されていない空のインスタンスを作成する。
-   */
-  static create(modelSetting) {
-    return new _CubismEyeBlink(modelSetting);
-  }
-  /**
-   * まばたきの間隔の設定
-   * @param blinkingInterval まばたきの間隔の時間[秒]
-   */
-  setBlinkingInterval(blinkingInterval) {
-    this._blinkingIntervalSeconds = blinkingInterval;
-  }
-  /**
-   * まばたきのモーションの詳細設定
-   * @param closing   まぶたを閉じる動作の所要時間[秒]
-   * @param closed    まぶたを閉じている動作の所要時間[秒]
-   * @param opening   まぶたを開く動作の所要時間[秒]
-   */
-  setBlinkingSetting(closing, closed, opening) {
-    this._closingSeconds = closing;
-    this._closedSeconds = closed;
-    this._openingSeconds = opening;
-  }
-  /**
-   * まばたきさせるパラメータIDのリストの設定
-   * @param parameterIds パラメータのIDのリスト
-   */
-  setParameterIds(parameterIds) {
-    this._parameterIds = parameterIds;
-  }
-  /**
-   * まばたきさせるパラメータIDのリストの取得
-   * @return パラメータIDのリスト
-   */
-  getParameterIds() {
-    return this._parameterIds;
-  }
-  /**
-   * モデルのパラメータの更新
-   * @param model 対象のモデル
-   * @param deltaTimeSeconds デルタ時間[秒]
-   */
-  updateParameters(model, deltaTimeSeconds) {
-    this._userTimeSeconds += deltaTimeSeconds;
-    let parameterValue;
-    let t = 0;
-    switch (this._blinkingState) {
-      case 2:
-        t = (this._userTimeSeconds - this._stateStartTimeSeconds) / this._closingSeconds;
-        if (t >= 1) {
-          t = 1;
-          this._blinkingState = 3;
-          this._stateStartTimeSeconds = this._userTimeSeconds;
-        }
-        parameterValue = 1 - t;
-        break;
-      case 3:
-        t = (this._userTimeSeconds - this._stateStartTimeSeconds) / this._closedSeconds;
-        if (t >= 1) {
-          this._blinkingState = 4;
-          this._stateStartTimeSeconds = this._userTimeSeconds;
-        }
-        parameterValue = 0;
-        break;
-      case 4:
-        t = (this._userTimeSeconds - this._stateStartTimeSeconds) / this._openingSeconds;
-        if (t >= 1) {
-          t = 1;
-          this._blinkingState = 1;
-          this._nextBlinkingTime = this.determinNextBlinkingTiming();
-        }
-        parameterValue = t;
-        break;
-      case 1:
-        if (this._nextBlinkingTime < this._userTimeSeconds) {
-          this._blinkingState = 2;
-          this._stateStartTimeSeconds = this._userTimeSeconds;
-        }
-        parameterValue = 1;
-        break;
-      case 0:
-      default:
-        this._blinkingState = 1;
-        this._nextBlinkingTime = this.determinNextBlinkingTiming();
-        parameterValue = 1;
-        break;
-    }
-    if (!_CubismEyeBlink.CloseIfZero) {
-      parameterValue = -parameterValue;
-    }
-    for (let i = 0; i < this._parameterIds.length; ++i) {
-      model.setParameterValueById(this._parameterIds[i], parameterValue);
-    }
-  }
-  /**
-   * コンストラクタ
-   * @param modelSetting モデルの設定情報
-   */
-  constructor(modelSetting) {
-    var _a, _b;
-    this._blinkingState = 0;
-    this._nextBlinkingTime = 0;
-    this._stateStartTimeSeconds = 0;
-    this._blinkingIntervalSeconds = 4;
-    this._closingSeconds = 0.1;
-    this._closedSeconds = 0.05;
-    this._openingSeconds = 0.15;
-    this._userTimeSeconds = 0;
-    this._parameterIds = [];
-    if (modelSetting == null) {
-      return;
-    }
-    this._parameterIds = (_b = (_a = modelSetting.getEyeBlinkParameters()) == null ? void 0 : _a.slice()) != null ? _b : this._parameterIds;
-  }
-  /**
-   * 次の瞬きのタイミングの決定
-   *
-   * @return 次のまばたきを行う時刻[秒]
-   */
-  determinNextBlinkingTiming() {
-    const r = Math.random();
-    return this._userTimeSeconds + r * (2 * this._blinkingIntervalSeconds - 1);
-  }
-};
-_CubismEyeBlink.CloseIfZero = true;
-let CubismEyeBlink = _CubismEyeBlink;
 class csmRect {
   /**
    * コンストラクタ
@@ -8523,6 +8274,164 @@ class CubismRenderer_WebGL extends CubismRenderer {
 CubismRenderer.staticRelease = () => {
   CubismRenderer_WebGL.doStaticRelease();
 };
+const _CubismEyeBlink = class _CubismEyeBlink {
+  /**
+   * コンストラクタ
+   * @param modelSetting モデルの設定情報
+   */
+  constructor(modelSetting) {
+    __publicField(this, "_blinkingState");
+    // 現在の状態
+    __publicField(this, "_parameterIds");
+    // 操作対象のパラメータのIDのリスト
+    __publicField(this, "_nextBlinkingTime");
+    // 次のまばたきの時刻[秒]
+    __publicField(this, "_stateStartTimeSeconds");
+    // 現在の状態が開始した時刻[秒]
+    __publicField(this, "_blinkingIntervalSeconds");
+    // まばたきの間隔[秒]
+    __publicField(this, "_blinkingIntervalRandomSeconds");
+    // まばたきの間隔のランダム値[秒]
+    __publicField(this, "_closingSeconds");
+    // まぶたを閉じる動作の所要時間[秒]
+    __publicField(this, "_closedSeconds");
+    // まぶたを閉じている動作の所要時間[秒]
+    __publicField(this, "_openingSeconds");
+    // まぶたを開く動作の所要時間[秒]
+    __publicField(this, "_userTimeSeconds");
+    var _a, _b;
+    this._blinkingState = 0;
+    this._nextBlinkingTime = 0;
+    this._stateStartTimeSeconds = 0;
+    this._blinkingIntervalSeconds = 4;
+    this._blinkingIntervalRandomSeconds = 1;
+    this._closingSeconds = 0.1;
+    this._closedSeconds = 0.05;
+    this._openingSeconds = 0.15;
+    this._userTimeSeconds = 0;
+    this._parameterIds = [];
+    if (modelSetting == null) {
+      return;
+    }
+    this._parameterIds = (_b = (_a = modelSetting.getEyeBlinkParameters()) == null ? void 0 : _a.slice()) != null ? _b : this._parameterIds;
+  }
+  /**
+   * インスタンスを作成する
+   * @param modelSetting モデルの設定情報
+   * @return 作成されたインスタンス
+   * @note 引数がNULLの場合、パラメータIDが設定されていない空のインスタンスを作成する。
+   */
+  static create(modelSetting) {
+    return new _CubismEyeBlink(modelSetting);
+  }
+  /**
+   * まばたきの間隔の設定
+   * @param blinkingInterval まばたきの間隔の時間[秒]
+   */
+  setBlinkingInterval(blinkingInterval) {
+    this._blinkingIntervalSeconds = blinkingInterval;
+  }
+  /**
+   * まばたきのモーションの詳細設定
+   * @param closing   まぶたを閉じる動作の所要時間[秒]
+   * @param closed    まぶたを閉じている動作の所要時間[秒]
+   * @param opening   まぶたを開く動作の所要時間[秒]
+   */
+  setBlinkingSetting(closing, closed, opening) {
+    this._closingSeconds = closing;
+    this._closedSeconds = closed;
+    this._openingSeconds = opening;
+  }
+  /**
+   * まばたきさせるパラメータIDのリストの設定
+   * @param parameterIds パラメータのIDのリスト
+   */
+  setParameterIds(parameterIds) {
+    this._parameterIds = parameterIds;
+  }
+  /**
+   * まばたきさせるパラメータIDのリストの取得
+   * @return パラメータIDのリスト
+   */
+  getParameterIds() {
+    return this._parameterIds;
+  }
+  /**
+   * モデルのパラメータの更新
+   * @param model 対象のモデル
+   * @param deltaTimeSeconds デルタ時間[秒]
+   */
+  updateParameters(model, deltaTimeSeconds) {
+    this._userTimeSeconds += deltaTimeSeconds;
+    let parameterValue;
+    let t = 0;
+    switch (this._blinkingState) {
+      case 2:
+        t = this._userTimeSeconds / this._closingSeconds;
+        if (t >= 1) {
+          t = 1;
+          this._blinkingState = 3;
+          this._userTimeSeconds = 0;
+        }
+        parameterValue = 1 - t;
+        break;
+      case 3:
+        t = this._userTimeSeconds / this._closedSeconds;
+        if (t >= 1) {
+          this._blinkingState = 4;
+          this._userTimeSeconds = 0;
+        }
+        parameterValue = 0;
+        break;
+      case 4:
+        t = this._userTimeSeconds / this._openingSeconds;
+        if (t >= 1) {
+          t = 1;
+          this._blinkingState = 1;
+          this._nextBlinkingTime = this.determinNextBlinkingTiming();
+          this._userTimeSeconds = 0;
+        }
+        parameterValue = t;
+        break;
+      case 1:
+        if (this._nextBlinkingTime < this._userTimeSeconds) {
+          this._blinkingState = 2;
+          this._userTimeSeconds = 0;
+        }
+        parameterValue = 1;
+        break;
+      case 0:
+      default:
+        this._blinkingState = 1;
+        this._nextBlinkingTime = this.determinNextBlinkingTiming();
+        parameterValue = 1;
+        break;
+    }
+    for (let i = 0; i < this._parameterIds.length; ++i) {
+      const paramId = this._parameterIds[i];
+      if (typeof paramId === "string") {
+        model.setParameterValueById(paramId, parameterValue);
+      }
+    }
+  }
+  /**
+   * 次の瞬きのタイミングの決定
+   *
+   * @return 次のまばたきを行う時刻[秒]
+   */
+  determinNextBlinkingTiming() {
+    let newBlinkInterval = this._blinkingIntervalSeconds;
+    newBlinkInterval += (Math.random() * 2 - 1) * this._blinkingIntervalRandomSeconds;
+    newBlinkInterval = Math.max(newBlinkInterval, 0);
+    return newBlinkInterval;
+  }
+};
+// デルタ時間の積算値[秒]
+/**
+ * IDで指定された目のパラメータが、0のときに閉じるなら true 、1の時に閉じるなら false 。
+ */
+__publicField(_CubismEyeBlink, "CloseIfZero", true);
+let CubismEyeBlink = _CubismEyeBlink;
 const tempMatrix = new CubismMatrix44();
 class Cubism4InternalModel extends InternalModel {
   constructor(coreModel, settings, options) {
@@ -8566,14 +8475,17 @@ class Cubism4InternalModel extends InternalModel {
       this.eyeBlink = CubismEyeBlink.create(this.settings);
     }
     this.breath.setParameters([
-      new BreathParameterData(this.idParamAngleX, 0, 15, 6.5345, 0.5),
-      new BreathParameterData(this.idParamAngleY, 0, 8, 3.5345, 0.5),
-      new BreathParameterData(this.idParamAngleZ, 0, 10, 5.5345, 0.5),
-      new BreathParameterData(this.idParamBodyAngleX, 0, 4, 15.5345, 0.5),
+      // 暂时不需要控制这些参数, 否则模型会摇头晃脑
+      // new BreathParameterData(this.idParamAngleX, 0.0, 15.0, 6.5345, 0.5),
+      // new BreathParameterData(this.idParamAngleY, 0.0, 8.0, 3.5345, 0.5),
+      // new BreathParameterData(this.idParamAngleZ, 0.0, 10.0, 5.5345, 0.5),
+      // new BreathParameterData(this.idParamBodyAngleX, 0.0, 4.0, 15.5345, 0.5),
+      // 保留对 PARAM_BREATH 参数的控制
       new BreathParameterData(this.idParamBreath, 0, 0.5, 3.2345, 0.5)
     ]);
     this.renderer.initialize(this.coreModel);
     this.renderer.setIsPremultipliedAlpha(true);
+    this.setBlinkParam(baseBlinkParam);
   }
   getSize() {
     return [
@@ -8716,6 +8628,26 @@ class Cubism4InternalModel extends InternalModel {
     this.coreModel.release();
     this.renderer = void 0;
     this.coreModel = void 0;
+  }
+  setBlinkParam(blinkParam) {
+    if (!this.eyeBlink) {
+      return;
+    }
+    try {
+      if (blinkParam.blinkInterval !== void 0)
+        this.eyeBlink._blinkingIntervalSeconds = blinkParam.blinkInterval / 1e3;
+      if (blinkParam.blinkIntervalRandom !== void 0)
+        this.eyeBlink._blinkingIntervalRandomSeconds = blinkParam.blinkIntervalRandom / 1e3;
+      if (blinkParam.closingDuration !== void 0)
+        this.eyeBlink._closingSeconds = blinkParam.closingDuration / 1e3;
+      if (blinkParam.closedDuration !== void 0)
+        this.eyeBlink._closedSeconds = blinkParam.closedDuration / 1e3;
+      if (blinkParam.openingDuration !== void 0)
+        this.eyeBlink._openingSeconds = blinkParam.openingDuration / 1e3;
+      this.eyeBlink._nextBlinkingTime = this.eyeBlink.determinNextBlinkingTiming();
+    } catch (error) {
+      console.error("Failed to set blink parameters:", error);
+    }
   }
 }
 class CubismModelSettingsJson {
@@ -11496,12 +11428,15 @@ export {
   XHRLoader,
   ZipLoader,
   applyMixins,
+  baseBlinkParam,
   clamp,
   config,
   copyArray,
   copyProperty,
+  cubism4,
   cubism4Ready,
   folderName,
+  legacyExpressionBlendMode,
   logger,
   rand,
   remove,

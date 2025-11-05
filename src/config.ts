@@ -50,14 +50,14 @@ export const config = {
      */
     preserveExpressionOnMotion: true,
 
-    export let cubism4 = CubismConfig;
-
     /**
      * 旧版表情混合模式
      */
-    export let legacyExpressionBlendMode = false;
-}
+};
 
+export const cubism4 = CubismConfig;
+
+export const legacyExpressionBlendMode = false;
 /**
  * Consistent with the `version` in package.json.
  */
