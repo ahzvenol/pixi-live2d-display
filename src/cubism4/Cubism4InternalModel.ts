@@ -1,6 +1,6 @@
 import type { InternalModelOptions } from "@/cubism-common";
-import type { CommonHitArea, CommonLayout } from "@/cubism-common/InternalModel";
-import { InternalModel } from "@/cubism-common/InternalModel";
+import type { BlinkParam, CommonHitArea, CommonLayout } from "@/cubism-common/InternalModel";
+import { baseBlinkParam, InternalModel } from "@/cubism-common/InternalModel";
 import type { Cubism4ModelSettings } from "@/cubism4/Cubism4ModelSettings";
 import { Cubism4MotionManager } from "@/cubism4/Cubism4MotionManager";
 import {
@@ -14,7 +14,6 @@ import {
     ParamMouthForm,
 } from "@cubism/cubismdefaultparameterid";
 import { BreathParameterData, CubismBreath } from "@cubism/effect/cubismbreath";
-import { CubismEyeBlink } from "@cubism/effect/cubismeyeblink";
 import type { CubismPose } from "@cubism/effect/cubismpose";
 import { CubismMatrix44 } from "@cubism/math/cubismmatrix44";
 import type { CubismModel } from "@cubism/model/cubismmodel";
@@ -24,6 +23,7 @@ import { CubismRenderer_WebGL, CubismShader_WebGL } from "@cubism/rendering/cubi
 import { Matrix } from "@pixi/core";
 import type { Mutable } from "../types/helpers";
 import { clamp } from "@/utils";
+import { CubismEyeBlink } from "./cubismeyeblink";
 
 const tempMatrix = new CubismMatrix44();
 
@@ -93,7 +93,7 @@ export class Cubism4InternalModel extends InternalModel {
             // new BreathParameterData(this.idParamAngleY, 0.0, 8.0, 3.5345, 0.5),
             // new BreathParameterData(this.idParamAngleZ, 0.0, 10.0, 5.5345, 0.5),
             // new BreathParameterData(this.idParamBodyAngleX, 0.0, 4.0, 15.5345, 0.5),
-            
+
             // 保留对 PARAM_BREATH 参数的控制
             new BreathParameterData(this.idParamBreath, 0.0, 0.5, 3.2345, 0.5),
         ]);
@@ -101,7 +101,7 @@ export class Cubism4InternalModel extends InternalModel {
         this.renderer.initialize(this.coreModel);
         this.renderer.setIsPremultipliedAlpha(true);
 
-        this.setBlinkParam(baseBlinkParam)
+        this.setBlinkParam(baseBlinkParam);
     }
 
     protected getSize(): [number, number] {
@@ -302,20 +302,26 @@ export class Cubism4InternalModel extends InternalModel {
         (this as Partial<this>).coreModel = undefined;
     }
 
-    setBlinkParam(blinkParam: BlinkParam): void {
+    setBlinkParam(blinkParam: Partial<BlinkParam>): void {
         if (!this.eyeBlink) {
             return;
         }
 
         try {
-            this.eyeBlink._blinkingIntervalSeconds = blinkParam.blinkInterval / 1000;
-            this.eyeBlink._blinkingIntervalRandomSeconds = blinkParam.blinkIntervalRandom / 1000;
-            this.eyeBlink._closingSeconds = blinkParam.closingDuration / 1000;
-            this.eyeBlink._closedSeconds = blinkParam.closedDuration / 1000;
-            this.eyeBlink._openingSeconds = blinkParam.openingDuration / 1000;
+            if (blinkParam.blinkInterval !== undefined)
+                this.eyeBlink._blinkingIntervalSeconds = blinkParam.blinkInterval / 1000;
+            if (blinkParam.blinkIntervalRandom !== undefined)
+                this.eyeBlink._blinkingIntervalRandomSeconds =
+                    blinkParam.blinkIntervalRandom / 1000;
+            if (blinkParam.closingDuration !== undefined)
+                this.eyeBlink._closingSeconds = blinkParam.closingDuration / 1000;
+            if (blinkParam.closedDuration !== undefined)
+                this.eyeBlink._closedSeconds = blinkParam.closedDuration / 1000;
+            if (blinkParam.openingDuration !== undefined)
+                this.eyeBlink._openingSeconds = blinkParam.openingDuration / 1000;
             this.eyeBlink._nextBlinkingTime = this.eyeBlink.determinNextBlinkingTiming();
         } catch (error) {
-            console.error('Failed to set blink parameters:', error);
+            console.error("Failed to set blink parameters:", error);
         }
     }
 }

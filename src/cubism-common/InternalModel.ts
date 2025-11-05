@@ -346,5 +346,5 @@ export abstract class InternalModel extends utils.EventEmitter {
      */
     abstract draw(gl: WebGLRenderingContext): void;
 
-    abstract setBlinkParam(blinkParam: BlinkParam): void;
+    abstract setBlinkParam(blinkParam: Partial<BlinkParam>): void;
 }

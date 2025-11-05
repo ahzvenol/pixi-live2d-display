@@ -1,13 +1,13 @@
-import type { InternalModelOptions } from "@/cubism-common";
-import type { CommonHitArea, CommonLayout } from "@/cubism-common/InternalModel";
-import { InternalModel } from "@/cubism-common/InternalModel";
-import { logger } from "../utils";
-import type { Cubism2ModelSettings } from "./Cubism2ModelSettings";
-import { Cubism2MotionManager } from "./Cubism2MotionManager";
-import { Live2DEyeBlink } from "./Live2DEyeBlink";
-import type { Live2DPhysics } from "./Live2DPhysics";
-import type { Live2DPose } from "./Live2DPose";
-import { clamp } from "@/utils";
+import type { InternalModelOptions } from "@/cubism-common"
+import type { BlinkParam, CommonHitArea, CommonLayout } from "@/cubism-common/InternalModel"
+import { baseBlinkParam, InternalModel } from "@/cubism-common/InternalModel"
+import { logger } from "../utils"
+import type { Cubism2ModelSettings } from "./Cubism2ModelSettings"
+import { Cubism2MotionManager } from "./Cubism2MotionManager"
+import { Live2DEyeBlink } from "./Live2DEyeBlink"
+import type { Live2DPhysics } from "./Live2DPhysics"
+import type { Live2DPose } from "./Live2DPose"
+import { clamp } from "@/utils"
 
 // prettier-ignore
 const tempMatrixArray = new Float32Array([
@@ -334,17 +334,17 @@ export class Cubism2InternalModel extends InternalModel {
         (this as Partial<this>).coreModel = undefined;
     }
 
-    setBlinkParam(blinkParam: BlinkParam): void {
+    setBlinkParam(blinkParam: Partial<BlinkParam>): void {
         if (!this.eyeBlink) {
             return;
         }
 
         try {
-            this.eyeBlink.blinkInterval = blinkParam.blinkInterval;
-            this.eyeBlink.blinkIntervalRandom = blinkParam.blinkIntervalRandom;
-            this.eyeBlink.closingDuration = blinkParam.closingDuration;
-            this.eyeBlink.closedDuration = blinkParam.closedDuration;
-            this.eyeBlink.openingDuration = blinkParam.openingDuration;
+            if (blinkParam.blinkInterval !== undefined) this.eyeBlink.blinkInterval = blinkParam.blinkInterval;
+            if (blinkParam.blinkIntervalRandom !== undefined) this.eyeBlink.blinkIntervalRandom = blinkParam.blinkIntervalRandom;
+            if (blinkParam.closingDuration !== undefined) this.eyeBlink.closingDuration = blinkParam.closingDuration;
+            if (blinkParam.closedDuration !== undefined) this.eyeBlink.closedDuration = blinkParam.closedDuration;
+            if (blinkParam.openingDuration !== undefined) this.eyeBlink.openingDuration = blinkParam.openingDuration;
             this.eyeBlink.recalculateBlinkInterval();
         } catch (error) {
             console.error('Failed to set blink parameters:', error);
